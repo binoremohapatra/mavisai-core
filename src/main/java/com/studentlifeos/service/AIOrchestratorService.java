@@ -2,273 +2,190 @@ package com.studentlifeos.service;
 
 import com.studentlifeos.dto.*;
 import com.studentlifeos.enums.Emotion;
-import com.studentlifeos.enums.IntentType;
 import com.studentlifeos.enums.MascotAction;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
 
+import java.time.Instant;
+import java.util.Base64;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Central "OS kernel"-like orchestrator.
- * - Detects intent using simple keywords.
- * - Delegates to module services.
- * - Combines logic + AI flavor text into ApiResponse.
- */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class AIOrchestratorService {
 
-    private final AttendanceService attendanceService;
-    private final WellnessService wellnessService;
-    private final AcademicService academicService;
-    private final CareerService careerService;
-    private final AiBrainWebClient aiBrainWebClient;
+    private final AIClientService aiClientService;
+    private final PythonAIService pythonAIService;
+
+    // 🧠 CACHE ENGINE
+    private final Map<String, CachedResponse> responseCache = new ConcurrentHashMap<>();
+    private static final long CACHE_TTL_SECONDS = 3600; // 1 Hour TTL
+    private static final int MAX_CACHE_SIZE = 1000;
 
     public ApiResponse<?> handleChat(AIChatRequest request) {
-        String message = request.getMessage();
-        String lower = message.toLowerCase();
-        IntentType intent = detectIntent(lower);
+        String userMessage = (request.getMessage() != null) ? request.getMessage().trim() : "";
+        String cacheKey = userMessage.toLowerCase();
 
-        log.info("Routing message '{}' with detected intent {}", message, intent);
+        log.info("Processing chat request: {}", userMessage);
 
-        return switch (intent) {
-            case GREETING -> buildAiResponse(
-                    request,
-                    intent,
-                    Map.of(),
-                    "Hi. I am here to help. You can ask about attendance, study planning, wellness, or career.",
-                    MascotAction.WAVE_HELLO,
-                    Emotion.FRIENDLY,
-                    VoiceMeta.friendly(),
-                    "Show a friendly wave animation near the chat bubble",
-                    null
-            );
-            case ATTENDANCE_QUERY -> {
-                AttendanceStatusPayload payload = attendanceService.getStatus(request.getUserId());
-                String pct = String.format("%.0f", payload.getCurrentPercentage());
-                String reply;
-                MascotAction action;
-                Emotion emotion;
-                VoiceMeta voiceMeta;
+        // 1. ⚡ QUICK BYPASS: Common Greetings (No API Hit)
+        if (isCommonGreeting(cacheKey)) {
+            return buildStaticGreeting();
+        }
 
-                if (payload.getStatus().name().equals("CRITICAL")) {
-                    reply = "Your attendance is at " + pct + " percent. That is risky. Please attend the next few classes.";
-                    action = MascotAction.SERIOUS_WARNING;
-                    emotion = Emotion.SERIOUS;
-                    voiceMeta = VoiceMeta.serious();
-                } else if (payload.getStatus().name().equals("WARNING")) {
-                    reply = "Your attendance is at " + pct + " percent. It is getting close to the limit. Try not to miss the next class.";
-                    action = MascotAction.SERIOUS_WARNING;
-                    emotion = Emotion.HELPFUL;
-                    voiceMeta = VoiceMeta.serious();
-                } else {
-                    reply = "Your attendance is at " + pct + " percent. You are currently safe. You can miss " + payload.getRemainingAbsences() + " more classes.";
-                    action = MascotAction.CELEBRATE;
-                    emotion = Emotion.HAPPY;
-                    voiceMeta = VoiceMeta.celebratory();
-                }
-
-                Map<String, Object> facts = Map.of(
-                        "attendancePercentage", payload.getCurrentPercentage(),
-                        "status", payload.getStatus().name(),
-                        "remainingAbsences", payload.getRemainingAbsences()
-                );
-                yield buildAiResponse(
-                        request,
-                        intent,
-                        facts,
-                        reply,
-                        action,
-                        emotion,
-                        voiceMeta,
-                        "Highlight attendance button or section for the user",
-                        payload
-                );
+        // 2. 🔍 CACHE LOOKUP: Check for existing, non-expired response
+        if (responseCache.containsKey(cacheKey)) {
+            CachedResponse cached = responseCache.get(cacheKey);
+            if (Instant.now().getEpochSecond() < cached.getExpiryTime()) {
+                log.info("🚀 Cache Hit! Reusing response for: {}", cacheKey);
+                return buildFinalResponse(cached.getResponse(), generateAudio(cached.getResponse().getReplyText()));
+            } else {
+                responseCache.remove(cacheKey); // Expired
             }
-            case EXAM_QUERY -> buildAiResponse(
-                    request,
-                    intent,
-                    Map.of(),
-                    "For your exam, keep it simple. Revise, practice, and take short breaks.",
-                    MascotAction.THINKING,
-                    Emotion.HELPFUL,
-                    VoiceMeta.friendly(),
-                    "Highlight academic/study planning section",
-                    null
-            );
-            case STUDY_PLANNING -> {
-                AcademicPlanPayload payload = academicService.createStudyPlan(
-                        buildDefaultStudyPlanRequest(request));
-                Map<String, Object> facts = Map.of(
-                        "focusArea", payload.getFocusArea(),
-                        "todayPlan", payload.getTodayPlan()
-                );
-                yield buildAiResponse(
-                        request,
-                        intent,
-                        facts,
-                        "Here is a simple plan for today. " + payload.getTodayPlan(),
-                        MascotAction.THINKING,
-                        Emotion.HELPFUL,
-                        VoiceMeta.friendly(),
-                        "Guide the user towards the study planning screen",
-                        payload
-                );
-            }
-            case CAREER_QUERY -> {
-                CareerAnalysisPayload payload = careerService.analyzeResume(
-                        buildDefaultCareerRequest(request));
-                Map<String, Object> facts = Map.of(
-                        "summary", payload.getSummary(),
-                        "skillGap", payload.getSkillGap()
-                );
-                yield buildAiResponse(
-                        request,
-                        intent,
-                        facts,
-                        "Here is a quick resume tip. " + payload.getSkillGap(),
-                        MascotAction.THINKING,
-                        Emotion.HELPFUL,
-                        VoiceMeta.friendly(),
-                        "Gently highlight the career tab or resume upload area",
-                        payload
-                );
-            }
-            case WELLNESS_CHECKIN -> {
-                WellnessSuggestionPayload payload = wellnessService.checkin(
-                        buildWellnessRequest(request));
-                Map<String, Object> facts = Map.of(
-                        "suggestion", payload.getSuggestion(),
-                        "note", payload.getNote()
-                );
-                yield buildAiResponse(
-                        request,
-                        intent,
-                        facts,
-                        payload.getSuggestion(),
-                        MascotAction.BREATHING_ANIMATION,
-                        Emotion.CALM,
-                        VoiceMeta.calm(),
-                        "Show a calm breathing animation near the mascot",
-                        payload
-                );
-            }
-            case UNKNOWN -> buildAiResponse(
-                    request,
-                    intent,
-                    Map.of(),
-                    "I am not sure I understood. You can ask about attendance, study planning, wellness, or career.",
-                    MascotAction.THINKING,
-                    Emotion.SERIOUS,
-                    VoiceMeta.serious(),
-                    "Show a small thinking animation; no automatic navigation",
-                    null
-            );
-        };
-    }
+        }
 
-    private IntentType detectIntent(String lowerMessage) {
-        if (!StringUtils.hasText(lowerMessage)) {
-            return IntentType.UNKNOWN;
-        }
-        if (lowerMessage.contains("hi") || lowerMessage.contains("hello") || lowerMessage.contains("hey")) {
-            return IntentType.GREETING;
-        }
-        if (lowerMessage.contains("attendance") || lowerMessage.contains("bunk") || lowerMessage.contains("present")) {
-            return IntentType.ATTENDANCE_QUERY;
-        }
-        if (lowerMessage.contains("exam") || lowerMessage.contains("test") || lowerMessage.contains("paper")) {
-            return IntentType.EXAM_QUERY;
-        }
-        if (lowerMessage.contains("study plan") || lowerMessage.contains("timetable") || lowerMessage.contains("schedule")) {
-            return IntentType.STUDY_PLANNING;
-        }
-        if (lowerMessage.contains("job") || lowerMessage.contains("internship") || lowerMessage.contains("career") ||
-                lowerMessage.contains("resume") || lowerMessage.contains("cv")) {
-            return IntentType.CAREER_QUERY;
-        }
-        if (lowerMessage.contains("stressed") || lowerMessage.contains("anxious") ||
-                lowerMessage.contains("tired") || lowerMessage.contains("mood")) {
-            return IntentType.WELLNESS_CHECKIN;
-        }
-        return IntentType.UNKNOWN;
-    }
+        // 3. CALL AI BRAIN (Groq/Gemini)
+        Map<String, Object> facts = new HashMap<>();
+        facts.put("userId", request.getUserId());
 
-    private AcademicStudyPlanRequest buildDefaultStudyPlanRequest(AIChatRequest request) {
-        AcademicStudyPlanRequest dto = new AcademicStudyPlanRequest();
-        dto.setUserId(request.getUserId());
-        dto.setFocusArea("Core subjects");
-        return dto;
-    }
-
-    private CareerResumeAnalyzeRequest buildDefaultCareerRequest(AIChatRequest request) {
-        CareerResumeAnalyzeRequest dto = new CareerResumeAnalyzeRequest();
-        dto.setUserId(request.getUserId());
-        dto.setResumeText("Short summary from chat: " + request.getMessage());
-        return dto;
-    }
-
-    private WellnessCheckinRequest buildWellnessRequest(AIChatRequest request) {
-        WellnessCheckinRequest dto = new WellnessCheckinRequest();
-        dto.setUserId(request.getUserId());
-        dto.setMoodNote(request.getMessage());
-        return dto;
-    }
-
-    private <T> ApiResponse<T> buildAiResponse(
-            AIChatRequest request,
-            IntentType intent,
-            Map<String, Object> facts,
-            String fallbackReply,
-            MascotAction fallbackAction,
-            Emotion fallbackEmotion,
-            VoiceMeta fallbackVoiceMeta,
-            String uiHint,
-            T payload
-    ) {
-        AiBrainRequest aiRequest = AiBrainRequest.builder()
-                .intent(intent.name())
+        AiBrainRequest brainRequest = AiBrainRequest.builder()
+                .intent("CHAT")
+                .userMessage(userMessage)
                 .facts(facts)
-                .userMessage(request.getMessage())
-                .desiredTone(fallbackVoiceMeta != null ? fallbackVoiceMeta.getTone() : "friendly")
+                .desiredTone("friendly")
                 .language("en")
                 .build();
-        AiBrainResponse aiResponse = aiBrainWebClient.generate(aiRequest);
 
-        String replyText = fallbackReply;
-        MascotAction action = fallbackAction;
-        Emotion emotion = fallbackEmotion;
-        VoiceMeta voiceMeta = fallbackVoiceMeta;
+        AiBrainResponse response = aiClientService.generate(brainRequest);
 
-        if (aiResponse != null) {
-            if (StringUtils.hasText(aiResponse.getReplyText())) {
-                replyText = aiResponse.getReplyText();
-            }
-            if (aiResponse.getMascotAction() != null) {
-                action = aiResponse.getMascotAction();
-            }
-            if (aiResponse.getEmotion() != null) {
-                emotion = aiResponse.getEmotion();
-            }
-            if (aiResponse.getVoiceMeta() != null) {
-                voiceMeta = aiResponse.getVoiceMeta();
-            }
+        // Fallback for empty AI responses
+        if (response == null || response.getReplyText() == null) {
+            response = createFallbackResponse();
         }
 
-        return ApiResponse.of(
-                replyText,
-                intent,
-                action,
-                emotion,
-                uiHint,
-                voiceMeta,
-                payload
-        );
+        // 4. ✅ DETERMINE BODY & FACE (Based on logic)
+        MascotAction action = determineAction(userMessage, response.getReplyText());
+        Emotion emotion = determineEmotion(action, userMessage, response.getReplyText());
+
+        response.setMascotAction(action);
+        response.setEmotion(emotion);
+
+        // 5. 💾 UPDATE CACHE
+        saveToCache(cacheKey, response);
+
+        // 6. GENERATE AUDIO & RETURN
+        return buildFinalResponse(response, generateAudio(response.getReplyText()));
+    }
+
+    // =================================================================
+    // 🛡️ CACHE HELPERS
+    // =================================================================
+
+    private void saveToCache(String key, AiBrainResponse response) {
+        if (responseCache.size() >= MAX_CACHE_SIZE) {
+            responseCache.clear(); // Emergency cleanup
+        }
+        long expiry = Instant.now().getEpochSecond() + CACHE_TTL_SECONDS;
+        responseCache.put(key, new CachedResponse(response, expiry));
+    }
+
+    private boolean isCommonGreeting(String msg) {
+        return msg.matches("^(hi|hello|hey|namaste|hola|hlo|helo)$");
+    }
+
+    private ApiResponse<?> buildStaticGreeting() {
+        return ApiResponse.builder()
+                .replyText("Hello! Mavis neural link active. How can I assist your studies today?")
+                .emotion(Emotion.HAPPY)
+                .mascotAction(MascotAction.WAVE)
+                .build();
+    }
+
+    private String generateAudio(String text) {
+        if (text == null || text.isEmpty()) return null;
+        try {
+            byte[] audioData = pythonAIService.generateAudio(text);
+            return (audioData != null) ? Base64.getEncoder().encodeToString(audioData) : null;
+        } catch (Exception e) {
+            log.error("Audio generation failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private ApiResponse<?> buildFinalResponse(AiBrainResponse res, String audioBase64) {
+        return ApiResponse.builder()
+                .replyText(res.getReplyText())
+                .emotion(res.getEmotion())
+                .mascotAction(res.getMascotAction())
+                .audioBase64(audioBase64)
+                .build();
+    }
+
+    // =================================================================
+    // 🕺 ANIMATION & EMOTION LOGIC
+    // =================================================================
+
+    public MascotAction determineAction(String userMessage, String aiReply) {
+        String input = (userMessage != null) ? userMessage.toLowerCase() : "";
+        String reply = (aiReply != null) ? aiReply.toLowerCase() : "";
+
+        if (matches(input, "hi", "hello", "hey", "bye", "wave")) return MascotAction.WAVE;
+        if (matches(input, "won", "win", "success", "congrats") || matches(reply, "congratulations", "proud")) return MascotAction.VICTORY;
+        if (matches(input, "thanks", "thank", "grateful", "appreciate")) return MascotAction.THANKFUL;
+        if (matches(input, "stupid", "idiot", "hate", "angry")) return MascotAction.ANGRY;
+        if (matches(input, "sorry", "sad", "fail", "hurt") || matches(reply, "apologize", "unfortunately")) return MascotAction.SAD;
+        if (matches(input, "think", "what", "why", "how", "hmm")) return MascotAction.THINKING;
+
+        return MascotAction.IDLE;
+    }
+
+    public Emotion determineEmotion(MascotAction action, String userMessage, String aiReply) {
+        String input = (userMessage != null) ? userMessage.toLowerCase() : "";
+
+        switch (action) {
+            case WAVE: return Emotion.FRIENDLY;
+            case VICTORY: return Emotion.CELEBRATORY;
+            case ANGRY: return Emotion.ANGRY;
+            case SAD: return Emotion.SAD;
+            case THANKFUL: return Emotion.SUPPORTIVE;
+        }
+
+        if (matches(input, "wow", "omg", "shock")) return Emotion.SURPRISED;
+        if (matches(input, "excited", "can't wait")) return Emotion.EXCITED;
+        if (matches(input, "what", "huh", "don't understand")) return Emotion.CONFUSED;
+        if (matches(input, "relax", "calm", "peace")) return Emotion.CALM;
+        if (matches(input, "urgent", "important", "exam")) return Emotion.SERIOUS;
+        if (matches(input, "good", "nice", "happy")) return Emotion.HAPPY;
+
+        return Emotion.NEUTRAL;
+    }
+
+    private boolean matches(String text, String... keywords) {
+        for (String keyword : keywords) {
+            if (text.contains(keyword)) return true;
+        }
+        return false;
+    }
+
+    private AiBrainResponse createFallbackResponse() {
+        return AiBrainResponse.builder()
+                .replyText("Neural link established. How can I assist?")
+                .emotion(Emotion.FRIENDLY)
+                .mascotAction(MascotAction.IDLE)
+                .build();
+    }
+
+    // 📦 Internal Helper for TTL Cache
+    @Getter
+    @AllArgsConstructor
+    private static class CachedResponse {
+        private final AiBrainResponse response;
+        private final long expiryTime;
     }
 }
-
-

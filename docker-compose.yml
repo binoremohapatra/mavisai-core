@@ -1,38 +1,18 @@
 version: '3.8'
 
 services:
-  ai-service:
-    build: ./ai_service
-    ports:
-      - "9001:9001"
-    environment:
-      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://localhost:11434}
-      - REQUEST_TIMEOUT_SECONDS=20
-      - LOG_LEVEL=INFO
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
-
   spring-boot:
     build: .
     ports:
-      - "8080:8080"
-    depends_on:
-      ai-service:
-        condition: service_healthy
+      - "8081:8081"
     environment:
-      - AI_BRAIN_BASE_URL=http://ai-service:9001
+      - AI_BRAIN_BASE_URL=https://MRBADDY-student-life-os-ai-docker.hf.space
       - AI_BRAIN_TIMEOUT_MS=5000
       - AI_BRAIN_CONNECT_TIMEOUT_MS=2000
       - AI_BRAIN_READ_TIMEOUT_MS=5000
       - AI_BRAIN_MAX_RETRIES=3
     restart: unless-stopped
+
 
   ollama:
     image: ollama/ollama:latest

@@ -1,71 +1,90 @@
 package com.studentlifeos.controller;
 
-import com.studentlifeos.dto.CodingAssistanceRequest;
-import com.studentlifeos.dto.CodingAssistanceResponse;
-import com.studentlifeos.dto.DevicePairingRequest;
-import com.studentlifeos.service.CodingAssistanceService;
-import com.studentlifeos.service.DeviceManagementService;
-import jakarta.validation.Valid;
+import com.studentlifeos.dto.ApiResponse;
+import com.studentlifeos.dto.AiBrainRequest;
+import com.studentlifeos.dto.AiBrainResponse;
+import com.studentlifeos.dto.VoiceMeta;
+import com.studentlifeos.enums.Emotion;
+import com.studentlifeos.enums.IntentType;
+import com.studentlifeos.enums.MascotAction;
+import com.studentlifeos.service.AIClientService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
+import java.util.Map;
+
 @RestController
-@RequestMapping("/api/coding")
+@RequestMapping("/api/v1/coding")
 @RequiredArgsConstructor
 @Slf4j
 public class CodingAssistanceController {
 
-    private final CodingAssistanceService codingAssistanceService;
-    private final DeviceManagementService deviceManagementService;
+    private final AIClientService aiClientService;
 
     @PostMapping("/assist")
-    public ResponseEntity<CodingAssistanceResponse> getAssistance(@Valid @RequestBody CodingAssistanceRequest request) {
-        log.info("Received coding assistance request from device: {}", request.getDeviceId());
+    public ResponseEntity<ApiResponse<Map<String, String>>> getAssistance(@RequestBody Map<String, Object> request) {
+        // Extracting mandatory fields from Axios payload
+        String codeSnippet = (String) request.get("codeContext");
+        if (codeSnippet == null) codeSnippet = (String) request.get("code");
         
-        CodingAssistanceResponse response = codingAssistanceService.processAssistanceRequest(request);
-        return ResponseEntity.ok(response);
-    }
+        // Fix: Extracting 'language' to prevent the Non-Null error
+        String lang = (String) request.get("language");
+        if (lang == null) lang = "auto-detect"; 
 
-    @PostMapping("/pair")
-    public ResponseEntity<PairingResponse> pairDevice(@Valid @RequestBody DevicePairingRequest request) {
+        log.info("Neural Fix Protocol: Initiating analysis for language: {}", lang);
+
         try {
-            String deviceId = deviceManagementService.pairDevice(request);
-            return ResponseEntity.ok(new PairingResponse(true, deviceId, "Device paired successfully"));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest()
-                    .body(new PairingResponse(false, null, "Invalid pairing code: " + e.getMessage()));
+            // Updated Builder with mandatory 'language' field
+            AiBrainRequest aiRequest = AiBrainRequest.builder()
+                    .intent("CODING_ASSIST")
+                    .language(lang) // Added this to fix the 500 error
+                    .userMessage("Analyze and fix this code. Return explanation and fixed code block. \n" + codeSnippet)
+                    .facts(new HashMap<>(Map.of("IDE", "Mavis_Local")))
+                    .desiredTone("technical")
+                    .build();
+
+            AiBrainResponse aiResponse = aiClientService.generate(aiRequest);
+            String reply = aiResponse.getReplyText() != null ? aiResponse.getReplyText() : "Diagnostics complete.";
+
+            Map<String, String> data = new HashMap<>();
+            data.put("explanation", reply);
+            data.put("fixedCode", extractCode(reply));
+
+            return ResponseEntity.ok(ApiResponse.of(
+                reply,
+                IntentType.CODING_ASSIST,
+                MascotAction.THINKING,
+                Emotion.SUPPORTIVE,
+                "Show code diff UI",
+                VoiceMeta.friendly(),
+                data
+            ));
+
         } catch (Exception e) {
-            log.error("Error pairing device", e);
-            return ResponseEntity.internalServerError()
-                    .body(new PairingResponse(false, null, "Failed to pair device"));
+            log.error("CODING_CONTROLLER_CRASH: {}", e.getMessage());
+            return ResponseEntity.status(500).body(ApiResponse.of(
+                "Neural Fix Protocol Failed: " + e.getMessage(), 
+                IntentType.UNKNOWN, MascotAction.ERROR_STATE, Emotion.SERIOUS, 
+                "Error", VoiceMeta.serious(), null
+            ));
         }
     }
 
-    @PostMapping("/pairing-code")
-    public ResponseEntity<PairingCodeResponse> generatePairingCode(@RequestParam String userId) {
-        String code = deviceManagementService.generatePairingCode(userId);
-        return ResponseEntity.ok(new PairingCodeResponse(code));
+    private String extractCode(String text) {
+        if (text != null && text.contains("```")) {
+            String[] parts = text.split("```");
+            if (parts.length > 1) {
+                return parts[1].replaceAll("^[a-zA-Z]+\\n", "");
+            }
+        }
+        return "";
     }
 
-    @DeleteMapping("/unpair/{deviceId}")
-    public ResponseEntity<Void> unpairDevice(@PathVariable String deviceId, @RequestParam String userId) {
-        deviceManagementService.unpairDevice(userId, deviceId);
-        return ResponseEntity.ok().build();
+    @GetMapping("/health")
+    public ResponseEntity<String> health() {
+        return ResponseEntity.ok("Coding Node Online");
     }
-
-    @GetMapping("/status/{deviceId}")
-    public ResponseEntity<DeviceStatusResponse> getDeviceStatus(@PathVariable String deviceId, 
-                                                           @RequestParam String userId) {
-        boolean isPaired = deviceManagementService.isDevicePaired(userId, deviceId);
-        var device = isPaired ? deviceManagementService.getDevice(deviceId) : null;
-        
-        return ResponseEntity.ok(new DeviceStatusResponse(isPaired, device));
-    }
-
-    // Response DTOs
-    public record PairingResponse(boolean success, String deviceId, String message) {}
-    public record PairingCodeResponse(String pairingCode) {}
-    public record DeviceStatusResponse(boolean paired, DeviceManagementService.PairedDevice device) {}
 }

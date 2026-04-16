@@ -11,6 +11,9 @@ public class CareerResumeAnalyzeRequest {
 
     @NotBlank
     private String resumeText;
+    
+    private String jobTitle;
+    private String experienceLevel;
 }
 
 

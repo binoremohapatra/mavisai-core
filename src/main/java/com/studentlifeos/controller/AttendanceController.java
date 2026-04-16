@@ -10,17 +10,14 @@ import com.studentlifeos.enums.MascotAction;
 import com.studentlifeos.service.AttendanceService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/attendance")
+@RequestMapping("/api/v1/attendance")
 @RequiredArgsConstructor
+@Slf4j
 public class AttendanceController {
 
     private final AttendanceService attendanceService;
@@ -28,8 +25,11 @@ public class AttendanceController {
     @PostMapping("/config")
     public ResponseEntity<ApiResponse<AttendanceStatusPayload>> saveConfig(
             @Valid @RequestBody AttendanceConfigRequest request) {
+        log.info("Received attendance config request for user: {}", request.getUserId());
+        
         AttendanceStatusPayload payload = attendanceService.saveConfig(request);
         String reply = "Saved your attendance settings. Your current status is " + payload.getStatus() + ".";
+        
         ApiResponse<AttendanceStatusPayload> resp = ApiResponse.of(
                 reply,
                 IntentType.ATTENDANCE_QUERY,
@@ -44,9 +44,12 @@ public class AttendanceController {
 
     @GetMapping("/status")
     public ResponseEntity<ApiResponse<AttendanceStatusPayload>> getStatus(@RequestParam Long userId) {
+        log.info("Received attendance status request for user: {}", userId);
+        
         AttendanceStatusPayload payload = attendanceService.getStatus(userId);
         String pct = String.format("%.0f", payload.getCurrentPercentage());
         String reply = "Your attendance is at " + pct + " percent. Status is " + payload.getStatus() + ".";
+        
         ApiResponse<AttendanceStatusPayload> resp = ApiResponse.of(
                 reply,
                 IntentType.ATTENDANCE_QUERY,
@@ -57,6 +60,11 @@ public class AttendanceController {
                 payload
         );
         return ResponseEntity.ok(resp);
+    }
+
+    @GetMapping("/health")
+    public ResponseEntity<String> health() {
+        return ResponseEntity.ok("Attendance service is healthy");
     }
 }
 

@@ -4,16 +4,23 @@ package com.studentlifeos.enums;
  * High-level emotional tone the mascot should convey.
  */
 public enum Emotion {
+    // Basic
     FRIENDLY,
-    HELPFUL,
-    SUPPORTIVE,
-    CALM,
-    SERIOUS,
     HAPPY,
     SAD,
     ANGRY,
     CONFUSED,
-    CELEBRATORY
+    THINKING,
+    SURPRISED,
+
+    // Advanced Contextual
+    HELPFUL,
+    SUPPORTIVE,
+    CALM,
+    SERIOUS,
+    CELEBRATORY,
+    EXCITED,
+    NEUTRAL
 }
 
 

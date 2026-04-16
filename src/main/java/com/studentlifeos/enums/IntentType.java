@@ -11,7 +11,8 @@ public enum IntentType {
     STUDY_PLANNING,
     CAREER_QUERY,
     WELLNESS_CHECKIN,
-    UNKNOWN
+    UNKNOWN,
+    CODING_ASSIST
 }
 
 
