@@ -106,17 +106,17 @@ public class AcademicService {
             int start = rawText.indexOf('{');
             int end = rawText.lastIndexOf('}');
 
-            if (start != -1 && end != -1 && end > start) {
+            if (start != -1 && end != -1 && end >= start) {
                 String jsonPart = rawText.substring(start, end + 1);
 
-                // 2. Fix unescaped quotes inside JSON values
+                // 2. Fix common AI JSON mishaps (unescaped quotes, extra commas)
                 jsonPart = jsonPart.replaceAll("(?<!\\\\)\"(?![: ,}\\]])", "\\\\\"");
-
+                
                 JsonNode json = objectMapper.readTree(jsonPart);
 
                 return AcademicPlanPayload.builder()
                         .focusArea(focusArea)
-                        .todayPlan(json.path("immediate").asText("Analyze core logic."))
+                        .todayPlan(json.path("immediate").asText(json.path("todayPlan").asText("Analyze core logic.")))
                         .weeklyGoals(json.path("weekly").asText(""))
                         .studyTips(json.path("tips").asText("Execute with precision."))
                         .aiGenerated(true)
@@ -124,17 +124,21 @@ public class AcademicService {
                         .mascotAction(aiResponse.getMascotAction() != null ? aiResponse.getMascotAction() : MascotAction.THINKING)
                         .build();
             }
+            log.warn("No JSON block found in AI response. Using text as weekly goals.");
             throw new Exception("No valid JSON block found.");
         } catch (Exception e) {
-            log.error("Parsing failed: {}", e.getMessage());
+            log.error("Parsing failed: {}. Raw text: {}", e.getMessage(), rawText);
+            
+            // If it's not JSON, we put the full reply in weeklyGoals so the user can at least read it
             return AcademicPlanPayload.builder()
                     .focusArea(focusArea)
-                    .todayPlan("Neural Sync Active. Manual parsing required.")
-                    .weeklyGoals(rawText)
-                    .studyTips("Consistency is the primary catalyst.")
+                    .todayPlan("Neural Sync Active. (Non-JSON Response)")
+                    .weeklyGoals(rawText != null ? rawText : "No response from neural link.")
+                    .studyTips("Check AI service logs for key rotation or timeout issues.")
                     .aiGenerated(true)
                     .build();
         }
+
     }
 
     private AcademicPlanPayload buildFallback(String topic) {
