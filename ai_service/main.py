@@ -199,6 +199,13 @@ class LLMClient:
 
     async def _call_provider(self, provider: str, system_prompt: str, user_prompt: str) -> str:
         if provider == "groq":
+            # 🚀 RESCUE MODE: Explicitly forcing 8B model to bypass 70B daily token exhaustion
+            current_model = getattr(self.settings, "groq_model", "llama-3.1-8b-instant")
+            if "70b" in current_model.lower():
+                logger.info("⚠️ 70B Model Daily Quota likely hit. Auto-switching to high-limit 8B model.")
+                # We monkey-patch the model for this instance's calls
+                object.__setattr__(self.settings, 'groq_model', 'llama-3.1-8b-instant')
+                
             return await self._call_groq_rotated(system_prompt, user_prompt)
         elif provider == "gemini":
             return await self._call_gemini_rotated(system_prompt, user_prompt)
