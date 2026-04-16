@@ -10,6 +10,8 @@ import random # ✅ Added for Key Shuffling
 from collections import deque
 from contextlib import asynccontextmanager
 from typing import Dict, Any, Deque, AsyncIterator
+import time
+import re
 
 from fastapi import FastAPI, UploadFile, File, Response
 from fastapi.responses import JSONResponse, FileResponse
@@ -29,6 +31,10 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("main")
+
+# 🌍 GLOBAL CACHE: To prevent hammer-hitting the backend
+CONTEXT_CACHE = {} 
+CACHE_TTL = 60 # 60 seconds
 
 # 🤫 Silence noisy third-party libraries
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -54,6 +60,11 @@ def get_key_list(env_var_name: str, fallback_single_key: str = None) -> list:
     
     if keys:
         random.shuffle(keys) # 🎲 Shuffle to distribute load
+        # 🔥 DEBUG: Log key status (masked)
+        masked_keys = [f"{k[:4]}...{k[-4:]}" for k in keys]
+        logger.info(f"🔑 Initialized '{env_var_name}': {len(keys)} keys found. {masked_keys}")
+    else:
+        logger.warning(f"⚠️ No keys found for '{env_var_name}'. Falling back to config.")
         
     return keys
 
@@ -61,7 +72,14 @@ def get_key_list(env_var_name: str, fallback_single_key: str = None) -> list:
 # 📡 CORE BACKEND SYNC
 # ==========================================
 async def fetch_user_context(http_client: httpx.AsyncClient, core_api_url: str, user_id: str) -> Dict[str, Any]:
-    """Fetch live data from the core backend if needed."""
+    """Fetch live data from the core backend if needed (with 60s cache)."""
+    now = time.time()
+    if user_id in CONTEXT_CACHE:
+        data, ts = CONTEXT_CACHE[user_id]
+        if now - ts < CACHE_TTL:
+            logger.debug(f"⚡ Context Cache Hit for user {user_id}")
+            return data
+
     facts = {}
     try:
         # ✅ SAFE FETCH: Fetching attendance doesn't call back to AI
@@ -69,6 +87,8 @@ async def fetch_user_context(http_client: httpx.AsyncClient, core_api_url: str, 
         if resp.status_code == 200:
             data = resp.json()
             facts["attendance"] = data.get("payload", {})
+            # Update Cache
+            CONTEXT_CACHE[user_id] = (facts, now)
     except Exception as e:
         logger.debug(f"⚠️ Context Fetch Failed: {e}") 
     return facts
@@ -81,7 +101,7 @@ from prompt import build_prompts, get_emotional_system_prompt
 # 🧠 1. MEMORY SYSTEM
 # ==========================================
 class ShortTermMemory:
-    def __init__(self, limit: int = 30):
+    def __init__(self, limit: int = 12): # 📉 Reduced from 30 to save tokens
         self.history: Deque[Dict[str, str]] = deque(maxlen=limit)
 
     def add_interaction(self, user_text: str, ai_text: str):
@@ -358,10 +378,14 @@ class AIBrain:
             # Use voice-friendly 'speech' if available, otherwise use 'replyText'
             ai_reply = parsed_preview.get("speech") or parsed_preview.get("replyText", "...")
             
-            # 🔥 ANTI-BLOAT: If reply is still a JSON string, prune it.
-            if isinstance(ai_reply, str) and ai_reply.strip().startswith("{") and ai_reply.strip().endswith("}"):
-                logger.debug("🛡️ Pruning JSON payload from conversation history.")
-                ai_reply = "[Generated a structured academic plan for you.]"
+            # 🔥 ROBUST ANTI-BLOAT: Remove ANY JSON blocks { ... } or Code blocks from history
+            # This ensures massive data payloads never enter conversation history.
+            if isinstance(ai_reply, str):
+                # Remove Markdown code blocks first
+                ai_reply = re.sub(r'```.*?```', '[Code Block]', ai_reply, flags=re.DOTALL)
+                # Remove large JSON clusters { ... }
+                if len(ai_reply) > 100:
+                    ai_reply = re.sub(r'\{.*?\}', '[Structured Data Block]', ai_reply, flags=re.DOTALL)
                 
             self.memory.add_interaction(user_text, ai_reply)
 

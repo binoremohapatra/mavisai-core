@@ -70,9 +70,9 @@ public class AIClientService {
                     .timeout(Duration.ofMillis(timeoutMs))
                     // 🛡️ Optimized Retries: Use lower retry count for standard calls
                     // This prevents "depletion loops" if the AI service is slow.
-                    .retryWhen(Retry.backoff(Math.min(maxRetries, 2), Duration.ofSeconds(5))
+                    .retryWhen(Retry.backoff(1, Duration.ofSeconds(10))
                             .doBeforeRetry(retry -> log.warn("Neural Link Retry: Attempt {}/{}", 
-                                    retry.totalRetries() + 1, Math.min(maxRetries, 2))))
+                                    retry.totalRetries() + 1, 1)))
                     .onErrorResume(Exception.class, ex -> {
                         log.error("Neural Link Request Failed: {}", ex.getMessage());
                         recordFailure();
