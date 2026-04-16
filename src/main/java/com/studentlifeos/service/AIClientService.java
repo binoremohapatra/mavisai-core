@@ -68,11 +68,9 @@ public class AIClientService {
                     .retrieve()
                     .bodyToMono(AiBrainResponse.class)
                     .timeout(Duration.ofMillis(timeoutMs))
-                    // 🛡️ Optimized Retries: Use lower retry count for standard calls
-                    // This prevents "depletion loops" if the AI service is slow.
-                    .retryWhen(Retry.backoff(1, Duration.ofSeconds(10))
-                            .doBeforeRetry(retry -> log.warn("Neural Link Retry: Attempt {}/{}", 
-                                    retry.totalRetries() + 1, 1)))
+                    // 🛡️ V3 SAFETY: Disable retries entirely for chat to prevent key depletion
+                    // One user click = Exactly 1 API request.
+                    .retryWhen(Retry.max(0))
                     .onErrorResume(Exception.class, ex -> {
                         log.error("Neural Link Request Failed: {}", ex.getMessage());
                         recordFailure();

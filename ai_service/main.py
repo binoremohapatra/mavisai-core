@@ -238,7 +238,9 @@ class LLMClient:
                     response = await client.post(url, json=payload, headers=headers)
                     
                     if response.status_code == 429:
-                        logger.debug(f"Rotating Groq key (429 hit).")
+                        error_detail = response.text[:200]
+                        logger.debug(f"Rotating Groq key (429 hit). Detail: {error_detail}")
+                        last_error = f"Rate Limit (429): {error_detail}"
                         continue 
                     
                     response.raise_for_status()
@@ -251,7 +253,7 @@ class LLMClient:
         
         # If loop finishes, all keys failed
         logger.error(f"❌ ALL GROQ KEYS EXHAUSTED: {last_error}")
-        raise last_error or Exception("All Groq Keys Exhausted")
+        raise Exception(f"All Groq Keys Exhausted. Last Error: {last_error}")
 
     # --- GEMINI HANDLER (ROTATION) ---
     async def _call_gemini_rotated(self, system_prompt: str, user_prompt: str) -> str:
@@ -366,6 +368,14 @@ class AIBrain:
             logger.debug("Brain Mode: EMOTIONAL (Chat)")
             system_prompt, strict_user_instruction = build_prompts(request)
             history_context = self.memory.get_context_string()
+            
+            # 🛡️ PROMPT GUARD: If history is too large, prune it to save the API key
+            combined_prompt_len = len(system_prompt) + len(history_context) + len(strict_user_instruction)
+            if combined_prompt_len > 3500: # Safe threshold for free 8B model limits
+                logger.warning(f"🛡️ Prompt Guard: Prompt too large ({combined_prompt_len} chars). Pruning history.")
+                self.memory.history.clear() # Emergency wipe
+                history_context = ""
+                
             user_prompt = f"{history_context}\n\n{strict_user_instruction}"
 
         # 🚀 CALL LLM (Auto-Switches & Rotates Keys)

@@ -53,7 +53,7 @@ def load_settings() -> Settings:
         
         # Groq Settings
         groq_api_key=_get_env("GROQ_API_KEY", ""),
-        groq_model=_get_env("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        groq_model=_get_env("GROQ_MODEL", "llama-3.1-8b-instant"),
         
         # Ollama Settings
         ollama_base_url=_get_env("OLLAMA_BASE_URL", "http://localhost:11434"),
