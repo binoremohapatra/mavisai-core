@@ -351,10 +351,18 @@ class AIBrain:
         # 🚀 CALL LLM (Auto-Switches & Rotates Keys)
         raw_output = await self.llm_client.generate(system_prompt, user_prompt)
         
-        # Memory Update
+        # Memory Update (Prune JSON bloat to save tokens)
         if not is_coding and raw_output:
             parsed_preview = parse_llm_payload(raw_output)
-            ai_reply = parsed_preview.get("replyText", "...")
+            
+            # Use voice-friendly 'speech' if available, otherwise use 'replyText'
+            ai_reply = parsed_preview.get("speech") or parsed_preview.get("replyText", "...")
+            
+            # 🔥 ANTI-BLOAT: If reply is still a JSON string, prune it.
+            if isinstance(ai_reply, str) and ai_reply.strip().startswith("{") and ai_reply.strip().endswith("}"):
+                logger.debug("🛡️ Pruning JSON payload from conversation history.")
+                ai_reply = "[Generated a structured academic plan for you.]"
+                
             self.memory.add_interaction(user_text, ai_reply)
 
         return raw_output

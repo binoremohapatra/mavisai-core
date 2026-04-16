@@ -56,9 +56,13 @@ def parse_llm_payload(raw: str) -> Dict[str, Any]:
         
         # Logic Fix: If AI returned the structured plan directly without 'replyText'
         if isinstance(parsed, dict) and "replyText" not in parsed:
+            # Check for common structured plan keys
             if any(key in parsed for key in ["weekly", "immediate", "todayPlan"]):
+                # Create a speaker-friendly snippet for the mascot
+                voice_snippet = parsed.get("immediate") or parsed.get("title") or "I've updated your academic strategy."
                 return {
-                    "replyText": raw, # Keep the raw JSON string as the reply for Java to parse
+                    "replyText": raw, # Keep raw for Java parsing
+                    "speech": voice_snippet, # Helper for TTS/History
                     "emotion": "HELPFUL",
                     "mascotAction": "THINKING"
                 }
